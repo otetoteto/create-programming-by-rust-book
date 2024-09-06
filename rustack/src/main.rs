@@ -1,86 +1,117 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    io::{BufRead, BufReader},
+};
 
-fn main() {
-    for line in std::io::stdin().lines().flatten() {
-        parse(&line);
-    }
+struct Vm {
+    stack: Vec<Value>,
+    vars: HashMap<String, Value>,
+    blocks: Vec<Vec<Value>>,
 }
 
-struct Vm<'src> {
-    stack: Vec<Value<'src>>,
-    vars: HashMap<&'src str, Value<'src>>,
-}
-
-impl<'src> Vm<'src> {
+impl Vm {
     fn new() -> Self {
         Self {
             stack: vec![],
             vars: HashMap::new(),
+            blocks: vec![],
         }
     }
 }
 
-fn parse<'a>(line: &'a str) -> Vec<Value> {
-    let mut vm = Vm::new();
-    let input: Vec<_> = line.split(" ").collect();
-    let mut words = &input[..];
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Value {
+    Num(i32),
+    Op(String),
+    Block(Vec<Value>),
+    Sym(String),
+}
 
-    while let Some((&word, mut rest)) = words.split_first() {
-        if word.is_empty() {
-            break;
+impl Value {
+    fn as_num(&self) -> i32 {
+        match self {
+            Self::Num(val) => *val,
+            _ => panic!("Value is not a number"),
         }
-        if word == "{" {
-            let value;
-            (value, rest) = parse_block(rest);
-            vm.stack.push(value);
-        } else {
-            let code = if let Ok(parsed) = word.parse::<i32>() {
-                Value::Num(parsed)
-            } else if word.starts_with("/") && word != "/" {
-                Value::Sym(&word[1..])
-            } else {
-                Value::Op(word)
-            };
-            eval(code, &mut vm);
-        }
-        words = rest;
     }
 
-    println!("vm: {:?}", vm.stack);
+    fn to_block(self) -> Vec<Value> {
+        match self {
+            Self::Block(val) => val,
+            _ => panic!("Value is not a block"),
+        }
+    }
+
+    fn to_string(&self) -> String {
+        match self {
+            Value::Num(i) => i.to_string(),
+            Value::Op(s) | Value::Sym(s) => s.clone(),
+            Value::Block(_) => "<Block>".to_string(),
+        }
+    }
+}
+
+fn main() {
+    if let Some(f) = std::env::args()
+        .nth(1)
+        .and_then(|f| std::fs::File::open(f).ok())
+    {
+        parse_batch(BufReader::new(f));
+    } else {
+        parse_interactive();
+    }
+}
+
+fn parse_batch(source: impl BufRead) -> Vec<Value> {
+    let mut vm = Vm::new();
+    for line in source.lines().flatten() {
+        for word in line.split(" ") {
+            parse_word(word, &mut vm);
+        }
+    }
     vm.stack
 }
 
-fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value<'src>, &'a [&'src str]) {
-    let mut tokens = vec![];
-    let mut words = input;
-
-    while let Some((&word, mut rest)) = words.split_first() {
-        if word.is_empty() {
-            break;
+fn parse_interactive() {
+    let mut vm = Vm::new();
+    for line in std::io::stdin().lines().flatten() {
+        for word in line.split(" ") {
+            parse_word(word, &mut vm);
         }
-
-        if word == "{" {
-            let value;
-            (value, rest) = parse_block(rest);
-            tokens.push(value);
-        } else if word == "}" {
-            return (Value::Block(tokens), rest);
-        } else if let Ok(value) = word.parse::<i32>() {
-            tokens.push(Value::Num(value));
-        } else if word.starts_with("/") && word != "/" {
-            tokens.push(Value::Sym(&word[1..]));
-        } else {
-            tokens.push(Value::Op(word));
-        }
-        words = rest;
+        println!("stack: {:?}", vm.stack);
     }
-
-    (Value::Block(tokens), words)
 }
 
-fn eval<'src>(code: Value<'src>, vm: &mut Vm<'src>) {
+fn parse_word(word: &str, vm: &mut Vm) {
+    if word.is_empty() {
+        return;
+    }
+    if word == "{" {
+        vm.blocks.push(vec![]);
+    } else if word == "}" {
+        let top_block = vm.blocks.pop().expect("Block stack underrun!");
+        eval(Value::Block(top_block), vm);
+    } else {
+        let code = if let Ok(i) = word.parse::<i32>() {
+            Value::Num(i)
+        } else if word.starts_with("/") && word != "/" {
+            Value::Sym(word[1..].to_string())
+        } else {
+            Value::Op(word.to_string())
+        };
+        eval(code, vm);
+    }
+}
+
+fn eval(code: Value, vm: &mut Vm) {
+    // block が続く間はその block stack に値を積み上げていく
+    // block の中身が評価されるのは現状 if オペレーションの時のみ (遅延実行される)
+    if let Some(top_block) = vm.blocks.last_mut() {
+        top_block.push(code);
+        return;
+    }
     match code {
-        Value::Op(op) => match op {
+        Value::Op(ref op) => match op as &str {
             "+" => add(&mut vm.stack),
             "-" => sub(&mut vm.stack),
             "*" => mul(&mut vm.stack),
@@ -88,6 +119,7 @@ fn eval<'src>(code: Value<'src>, vm: &mut Vm<'src>) {
             "<" => lt(&mut vm.stack),
             "if" => op_if(vm),
             "def" => op_def(vm),
+            "puts" => puts(vm),
             _ => {
                 let val = vm
                     .vars
@@ -124,40 +156,14 @@ fn op_if(vm: &mut Vm) {
 
 fn op_def(vm: &mut Vm) {
     let val = vm.stack.pop().unwrap();
-    let sym = vm.stack.pop().unwrap().as_sym();
+    let sym = vm.stack.pop().unwrap().to_string();
 
     vm.vars.insert(sym, val);
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Value<'src> {
-    Num(i32),
-    Op(&'src str),
-    Block(Vec<Value<'src>>),
-    Sym(&'src str),
-}
-
-impl<'src> Value<'src> {
-    fn as_num(&self) -> i32 {
-        match self {
-            Self::Num(val) => *val,
-            _ => panic!("Value is not a number"),
-        }
-    }
-
-    fn as_sym(&self) -> &'src str {
-        match self {
-            Self::Sym(sym) => *sym,
-            _ => panic!("Value is not a symbol"),
-        }
-    }
-
-    fn to_block(self) -> Vec<Value<'src>> {
-        match self {
-            Self::Block(val) => val,
-            _ => panic!("Value is not a block"),
-        }
-    }
+fn puts(vm: &mut Vm) {
+    let val = vm.stack.pop().unwrap();
+    println!("{}", val.to_string());
 }
 
 macro_rules! impl_op {
@@ -178,37 +184,62 @@ impl_op!(lt, <);
 
 #[cfg(test)]
 mod test {
-    use super::{parse, Value::*};
-    #[test]
-    fn test_group() {
-        assert_eq!(
-            parse("1 2 + { 3 4 - }"),
-            vec![Num(3), Block(vec![Num(3), Num(4), Op("-")])]
-        );
+    use super::{Value::*, *};
+    use std::io::Cursor;
+
+    fn parse(input: &str) -> Vec<Value> {
+        parse_batch(Cursor::new(input))
     }
 
     #[test]
-    fn test_if_true() {
+    fn test_group() {
         assert_eq!(
-            parse("1 2 + { { 3 4 + 7 - } { 1 1 + } { 1 1 - } if } { 3 4 - } { 5 6 + } if *"),
-            vec![Num(33)]
+            parse("1 2 + { 3 4 }"),
+            vec![Num(3), Block(vec![Num(3), Num(4)])]
         );
     }
 
     #[test]
     fn test_if_false() {
-        assert_eq!(
-            parse("1 2 + { 3 4 + 8 - } { 3 4 - } { 5 6 + } if *"),
-            vec![Num(-3)]
-        );
+        assert_eq!(parse("{ 1 -1 + } { 100 } { -100 } if"), vec![Num(-100)]);
+    }
+
+    #[test]
+    fn test_if_true() {
+        assert_eq!(parse("{ 1 1 + } { 100 } { -100 } if"), vec![Num(100)]);
     }
 
     #[test]
     fn test_var() {
-        assert_eq!(parse("/x 30 20 + def /y 2 def x y /"), vec![Num(25)]);
-        assert_eq!(parse("/x 30 20 + def /y x def x y -"), vec![Num(0)]);
+        assert_eq!(parse("/x 10 def /y 20 def x y *"), vec![Num(200)]);
+    }
+
+    #[test]
+    fn test_var_if() {
         assert_eq!(
-            parse("/x 10 def /y 20 def /z { x y < } { x } { y } if def z"),
+            parse("/x 10 def /y 20 def { x y < } { x } { y } if"),
+            vec![Num(10)]
+        );
+    }
+
+    #[test]
+    fn test_multiline() {
+        assert_eq!(
+            parse(
+                r#"
+/x 10 def
+/y 20 def
+
+{
+    x
+    y
+    <
+}
+{ x }
+{ y }
+if
+"#
+            ),
             vec![Num(10)]
         );
     }
