@@ -11,9 +11,24 @@ struct Vm {
 
 impl Vm {
     fn new() -> Self {
+        let functions: [(&str, fn(&mut Vm)); 10] = [
+            ("+", add),
+            ("-", sub),
+            ("*", mul),
+            ("/", div),
+            ("<", lt),
+            ("if", op_if),
+            ("def", op_def),
+            ("puts", puts),
+            ("dup", dup),
+            ("exch", exch),
+        ];
         Self {
             stack: vec![],
-            vars: HashMap::new(),
+            vars: functions
+                .into_iter()
+                .map(|(name, f)| (name.to_owned(), Value::Native(NativeOp(f))))
+                .collect(),
             blocks: vec![],
         }
     }
@@ -25,6 +40,7 @@ enum Value {
     Op(String),
     Block(Vec<Value>),
     Sym(String),
+    Native(NativeOp),
 }
 
 impl Value {
@@ -47,7 +63,25 @@ impl Value {
             Value::Num(i) => i.to_string(),
             Value::Op(s) | Value::Sym(s) => s.clone(),
             Value::Block(_) => "<Block>".to_string(),
+            Value::Native(_) => "<Native>".to_string(),
         }
+    }
+}
+
+#[derive(Clone)]
+struct NativeOp(fn(&mut Vm));
+
+impl PartialEq for NativeOp {
+    fn eq(&self, other: &NativeOp) -> bool {
+        self.0 as *const fn() == other.0 as *const fn()
+    }
+}
+
+impl Eq for NativeOp {}
+
+impl std::fmt::Debug for NativeOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<NativeOp>")
     }
 }
 
@@ -78,7 +112,6 @@ fn parse_interactive() {
         for word in line.split(" ") {
             parse_word(word, &mut vm);
         }
-        println!("stack: {:?}", vm.stack);
     }
 }
 
@@ -105,30 +138,27 @@ fn parse_word(word: &str, vm: &mut Vm) {
 
 fn eval(code: Value, vm: &mut Vm) {
     // block が続く間はその block stack に値を積み上げていく
-    // block の中身が評価されるのは現状 if オペレーションの時のみ (遅延実行される)
     if let Some(top_block) = vm.blocks.last_mut() {
         top_block.push(code);
         return;
     }
-    match code {
-        Value::Op(ref op) => match op as &str {
-            "+" => add(&mut vm.stack),
-            "-" => sub(&mut vm.stack),
-            "*" => mul(&mut vm.stack),
-            "/" => div(&mut vm.stack),
-            "<" => lt(&mut vm.stack),
-            "if" => op_if(vm),
-            "def" => op_def(vm),
-            "puts" => puts(vm),
-            _ => {
-                let val = vm
-                    .vars
-                    .get(op)
-                    .expect(&format!("{op:?} is not a defined operation"));
-                vm.stack.push(val.clone());
+    if let Value::Op(ref op) = code {
+        let val = vm
+            .vars
+            .get(op)
+            .expect(&format!("{op:?} is not a defined operation"))
+            .clone();
+        match val {
+            Value::Block(block) => {
+                for code in block {
+                    eval(code, vm);
+                }
             }
-        },
-        _ => vm.stack.push(code.clone()),
+            Value::Native(op) => op.0(vm),
+            _ => vm.stack.push(val),
+        }
+    } else {
+        vm.stack.push(code.clone());
     }
 }
 
@@ -166,12 +196,24 @@ fn puts(vm: &mut Vm) {
     println!("{}", val.to_string());
 }
 
+fn dup(vm: &mut Vm) {
+    let value = vm.stack.last().unwrap();
+    vm.stack.push(value.clone());
+}
+
+fn exch(vm: &mut Vm) {
+    let val1 = vm.stack.pop().unwrap();
+    let val2 = vm.stack.pop().unwrap();
+    vm.stack.push(val2);
+    vm.stack.push(val1);
+}
+
 macro_rules! impl_op {
     {$name :ident, $op:tt} => {
-        fn $name(stack: &mut Vec<Value>) {
-            let r = stack.pop().unwrap().as_num();
-            let l = stack.pop().unwrap().as_num();
-            stack.push(Value::Num((l $op r) as i32));
+        fn $name(vm: &mut Vm) {
+            let r = vm.stack.pop().unwrap().as_num();
+            let l = vm.stack.pop().unwrap().as_num();
+            vm.stack.push(Value::Num((l $op r) as i32));
         }
     };
 }
@@ -227,20 +269,28 @@ mod test {
         assert_eq!(
             parse(
                 r#"
-/x 10 def
-/y 20 def
+    /x 10 def
+    /y 20 def
 
-{
-    x
-    y
-    <
-}
-{ x }
-{ y }
-if
+    { x y < }
+    { x }
+    { y }
+    if
 "#
             ),
             vec![Num(10)]
+        );
+    }
+
+    #[test]
+    fn test_function() {
+        assert_eq!(
+            parse(
+                r#"
+    /double { 2 * } def
+    10 double"#
+            ),
+            vec![Num(20)]
         );
     }
 }
