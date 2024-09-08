@@ -5,7 +5,7 @@ use std::{
 
 struct Vm {
     stack: Vec<Value>,
-    vars: HashMap<String, Value>,
+    vars: Vec<HashMap<String, Value>>,
     blocks: Vec<Vec<Value>>,
 }
 
@@ -25,12 +25,19 @@ impl Vm {
         ];
         Self {
             stack: vec![],
-            vars: functions
+            vars: vec![functions
                 .into_iter()
                 .map(|(name, f)| (name.to_owned(), Value::Native(NativeOp(f))))
-                .collect(),
+                .collect()],
             blocks: vec![],
         }
+    }
+
+    fn find_var(&self, name: &str) -> Option<Value> {
+        self.vars
+            .iter()
+            .rev()
+            .find_map(|var| var.get(name).map(|var| var.to_owned()))
     }
 }
 
@@ -145,15 +152,17 @@ fn eval(code: Value, vm: &mut Vm) {
     }
     if let Value::Op(ref op) = code {
         let val = vm
-            .vars
-            .get(op)
-            .expect(&format!("{op:?} is not a defined operation"))
-            .clone();
+            .find_var(op)
+            .expect(&format!("{op:?} is not a defined operation"));
         match val {
             Value::Block(block) => {
+                // ブロックごとにローカル変数のスコープが作成される
+                vm.vars.push(HashMap::new());
                 for code in block {
                     eval(code, vm);
                 }
+                // ブロックを抜ける時、そのブロック内でのローカル変数を捨てる
+                vm.vars.pop();
             }
             Value::Native(op) => op.0(vm),
             _ => vm.stack.push(val),
@@ -189,7 +198,7 @@ fn op_def(vm: &mut Vm) {
     let val = vm.stack.pop().unwrap();
     let sym = vm.stack.pop().unwrap().to_string();
 
-    vm.vars.insert(sym, val);
+    vm.vars.last_mut().unwrap().insert(sym, val);
 }
 
 fn puts(vm: &mut Vm) {
