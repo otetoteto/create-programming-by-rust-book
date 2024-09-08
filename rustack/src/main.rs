@@ -113,6 +113,7 @@ fn parse_interactive() {
             parse_word(word, &mut vm);
         }
     }
+    println!("{:?}", vm.stack);
 }
 
 fn parse_word(word: &str, vm: &mut Vm) {
@@ -204,8 +205,8 @@ fn dup(vm: &mut Vm) {
 fn exch(vm: &mut Vm) {
     let val1 = vm.stack.pop().unwrap();
     let val2 = vm.stack.pop().unwrap();
-    vm.stack.push(val2);
     vm.stack.push(val1);
+    vm.stack.push(val2);
 }
 
 macro_rules! impl_op {
