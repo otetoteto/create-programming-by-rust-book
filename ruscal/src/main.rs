@@ -2,6 +2,8 @@
 enum Token {
     Ident,
     Number,
+    LParen,
+    RParen,
 }
 
 fn main() {
@@ -28,27 +30,43 @@ fn token(i: &str) -> (&str, Option<Token>) {
     if let (i, Some(number_res)) = number(whitespace(i)) {
         return (i, Some(number_res));
     }
+    if let (i, Some(lparen_res)) = lparen(whitespace(i)) {
+        return (i, Some(lparen_res));
+    }
+    if let (i, Some(rparen_res)) = rparen(whitespace(i)) {
+        return (i, Some(rparen_res));
+    }
     (i, None)
 }
 
+fn lparen(mut input: &str) -> (&str, Option<Token>) {
+    if matches!(peek_char(input), Some('(')) {
+        input = advance_char(input);
+        return (input, Some(Token::LParen));
+    }
+    (input, None)
+}
+
+fn rparen(mut input: &str) -> (&str, Option<Token>) {
+    if matches!(peek_char(input), Some(')')) {
+        input = advance_char(input);
+        return (input, Some(Token::RParen));
+    }
+    (input, None)
+}
+
 fn whitespace(mut input: &str) -> &str {
-    while matches!(input.chars().next(), Some(' ')) {
-        let mut chars = input.chars();
-        chars.next();
-        input = chars.as_str();
+    while matches!(peek_char(input), Some(' ')) {
+        input = advance_char(input)
     }
     input
 }
 
 fn number(mut input: &str) -> (&str, Option<Token>) {
-    if matches!(input.chars().next(), Some(_x @ ('-' | '+' | '0'..='9'))) {
-        let mut chars = input.chars();
-        chars.next();
-        input = chars.as_str();
-        while matches!(input.chars().next(), Some(_x @ ('.' | '0'..='9'))) {
-            let mut chars = input.chars();
-            chars.next();
-            input = chars.as_str();
+    if matches!(peek_char(input), Some(_x @ ('-' | '+' | '0'..='9'))) {
+        input = advance_char(input);
+        while matches!(peek_char(input), Some(_x @ ('.' | '0'..='9'))) {
+            input = advance_char(input);
         }
         (input, Some(Token::Number))
     } else {
@@ -57,19 +75,27 @@ fn number(mut input: &str) -> (&str, Option<Token>) {
 }
 
 fn ident(mut input: &str) -> (&str, Option<Token>) {
-    if matches!(input.chars().next(), Some(_x @ ('a'..='z' | 'A'..='Z'))) {
+    if matches!(peek_char(input), Some(_x @ ('a'..='z' | 'A'..='Z'))) {
         while matches!(
-            input.chars().next(),
+            peek_char(input),
             Some(_x @ ('a'..='z' | 'A'..='Z' | '0'..='9'))
         ) {
-            let mut chars = input.chars();
-            chars.next();
-            input = chars.as_str();
+            input = advance_char(input);
         }
         (input, Some(Token::Ident))
     } else {
         (input, None)
     }
+}
+
+fn advance_char(input: &str) -> &str {
+    let mut chars = input.chars();
+    chars.next();
+    chars.as_str()
+}
+
+fn peek_char(input: &str) -> Option<char> {
+    input.chars().next()
 }
 
 #[cfg(test)]
@@ -94,8 +120,23 @@ mod test {
     #[test]
     fn test_source() {
         assert_eq!(
-            source("    ident  12.4 -3 token "),
-            vec![Token::Ident, Token::Number, Token::Number, Token::Ident]
+            source("    ident  12.4 -3 token (( +0.9)((  a ))        )"),
+            vec![
+                Token::Ident,
+                Token::Number,
+                Token::Number,
+                Token::Ident,
+                Token::LParen,
+                Token::LParen,
+                Token::Number,
+                Token::RParen,
+                Token::LParen,
+                Token::LParen,
+                Token::Ident,
+                Token::RParen,
+                Token::RParen,
+                Token::RParen
+            ]
         )
     }
 }
