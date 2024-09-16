@@ -2,7 +2,7 @@ use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{alpha1, alphanumeric1, char, multispace0},
-    combinator::recognize,
+    combinator::{opt, recognize},
     error::ParseError,
     multi::{fold_many0, many0},
     number::complete::recognize_float,
@@ -23,6 +23,7 @@ enum Expression<'src> {
     Sub(Box<Expression<'src>>, Box<Expression<'src>>),
     Mul(Box<Expression<'src>>, Box<Expression<'src>>),
     Div(Box<Expression<'src>>, Box<Expression<'src>>),
+    FnInvoke(&'src str, Vec<Expression<'src>>),
 }
 
 fn main() {
@@ -39,6 +40,21 @@ fn eval(expr: Expression) -> f64 {
         Expression::Sub(lhs, rhs) => eval(*lhs) - eval(*rhs),
         Expression::Mul(lhs, rhs) => eval(*lhs) * eval(*rhs),
         Expression::Div(lhs, rhs) => eval(*lhs) / eval(*rhs),
+        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args),
+        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args),
+        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args),
+        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args),
+        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args),
+        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args),
+        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args),
+        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args),
+        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args),
+        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args),
+        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args),
+        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args),
+        Expression::FnInvoke(name, _) => {
+            panic!("Unknown function {name:?}")
+        }
     }
 }
 
@@ -70,8 +86,35 @@ fn term(i: &str) -> IResult<&str, Expression> {
     )(i)
 }
 
+fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
+    move |args| {
+        f(eval(
+            args.into_iter().next().expect("function missing argument"),
+        ))
+    }
+}
+
+fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
+    move |args| {
+        let mut itr = args.into_iter();
+        let lhs = eval(itr.next().expect("function missing the first argument"));
+        let rhs = eval(itr.next().expect("function missing the second argument"));
+        f(lhs, rhs)
+    }
+}
+
+fn func_call(i: &str) -> IResult<&str, Expression> {
+    let (r, ident) = space_delimited(identifier)(i)?;
+    let (r, args) = space_delimited(delimited(
+        tag("("),
+        many0(delimited(multispace0, expr, space_delimited(opt(tag(","))))),
+        tag(")"),
+    ))(r)?;
+    Ok((r, Expression::FnInvoke(ident, args)))
+}
+
 fn factor(i: &str) -> IResult<&str, Expression> {
-    alt((number, ident, parens))(i)
+    alt((number, func_call, ident, parens))(i)
 }
 
 fn ident(i: &str) -> IResult<&str, Expression> {
@@ -159,5 +202,6 @@ mod test {
             expr("10 / 5 - 5 * 2 * (1 + 2)").map(|(_, e)| eval(e)),
             Ok(-28.)
         );
+        assert_eq!(expr("pow(2, 3) + 3").map(|(_, e)| eval(e)), Ok(11.))
     }
 }
