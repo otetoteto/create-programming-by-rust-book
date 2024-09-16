@@ -3,10 +3,11 @@ use nom::{
     bytes::complete::tag,
     character::complete::{alpha1, alphanumeric1, char, multispace0},
     combinator::recognize,
+    error::ParseError,
     multi::{fold_many0, many0},
     number::complete::recognize_float,
     sequence::{delimited, pair},
-    IResult,
+    IResult, Parser,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -19,18 +20,62 @@ enum Token<'src> {
 enum Expression<'src> {
     Value(Token<'src>),
     Add(Box<Expression<'src>>, Box<Expression<'src>>),
+    Sub(Box<Expression<'src>>, Box<Expression<'src>>),
+    Mul(Box<Expression<'src>>, Box<Expression<'src>>),
+    Div(Box<Expression<'src>>, Box<Expression<'src>>),
 }
 
 fn main() {
     println!("Hello, world!");
 }
 
+fn eval(expr: Expression) -> f64 {
+    match expr {
+        Expression::Value(token) => match token {
+            Token::Ident(ident) => panic!("Unknown name {:?}", ident),
+            Token::Number(f) => f,
+        },
+        Expression::Add(lhs, rhs) => eval(*lhs) + eval(*rhs),
+        Expression::Sub(lhs, rhs) => eval(*lhs) - eval(*rhs),
+        Expression::Mul(lhs, rhs) => eval(*lhs) * eval(*rhs),
+        Expression::Div(lhs, rhs) => eval(*lhs) / eval(*rhs),
+    }
+}
+
+fn expr(i: &str) -> IResult<&str, Expression> {
+    let (i, init) = term(i)?;
+
+    fold_many0(
+        pair(space_delimited(alt((char('+'), char('-')))), term),
+        move || init.clone(),
+        |acc, (op, val): (char, Expression)| match op {
+            '+' => Expression::Add(Box::new(acc), Box::new(val)),
+            '-' => Expression::Sub(Box::new(acc), Box::new(val)),
+            _ => panic!("Additice expression shoud have '+' or '-' operator"),
+        },
+    )(i)
+}
+
 fn term(i: &str) -> IResult<&str, Expression> {
+    let (i, init) = factor(i)?;
+
+    fold_many0(
+        pair(space_delimited(alt((char('*'), char('/')))), factor),
+        move || init.clone(),
+        |acc, (op, val): (char, Expression)| match op {
+            '*' => Expression::Mul(Box::new(acc), Box::new(val)),
+            '/' => Expression::Div(Box::new(acc), Box::new(val)),
+            _ => panic!("Muitiplicative expression should have '*' or '/' operator"),
+        },
+    )(i)
+}
+
+fn factor(i: &str) -> IResult<&str, Expression> {
     alt((number, ident, parens))(i)
 }
 
 fn ident(i: &str) -> IResult<&str, Expression> {
-    let (r, res) = delimited(multispace0, identifier, multispace0)(i)?;
+    let (r, res) = space_delimited(identifier)(i)?;
     Ok((r, Expression::Value(Token::Ident(res))))
 }
 
@@ -42,7 +87,7 @@ fn identifier(i: &str) -> IResult<&str, &str> {
 }
 
 fn number(input: &str) -> IResult<&str, Expression> {
-    let (r, v) = delimited(multispace0, recognize_float, multispace0)(input)?;
+    let (r, v) = space_delimited(recognize_float)(input)?;
     Ok((
         r,
         Expression::Value(Token::Number(v.parse().map_err(|_| {
@@ -55,21 +100,16 @@ fn number(input: &str) -> IResult<&str, Expression> {
 }
 
 fn parens(i: &str) -> IResult<&str, Expression> {
-    delimited(
-        multispace0,
-        delimited(tag("("), expr, tag(")")),
-        multispace0,
-    )(i)
+    space_delimited(delimited(tag("("), expr, tag(")")))(i)
 }
 
-fn expr(i: &str) -> IResult<&str, Expression> {
-    let (i, init) = term(i)?;
-
-    fold_many0(
-        pair(delimited(multispace0, char('+'), multispace0), term),
-        move || init.clone(),
-        |acc, (_op, val): (char, Expression)| Expression::Add(Box::new(acc), Box::new(val)),
-    )(i)
+fn space_delimited<'src, O, E>(
+    f: impl Parser<&'src str, O, E>,
+) -> impl FnMut(&'src str) -> IResult<&'src str, O, E>
+where
+    E: ParseError<&'src str>,
+{
+    delimited(multispace0, f, multispace0)
 }
 
 #[cfg(test)]
@@ -110,5 +150,14 @@ mod test {
                 )
             ))
         )
+    }
+
+    #[test]
+    fn test_eval() {
+        assert_eq!(expr(" 2 + 3 * 2").map(|(_, e)| eval(e)), Ok(8.));
+        assert_eq!(
+            expr("10 / 5 - 5 * 2 * (1 + 2)").map(|(_, e)| eval(e)),
+            Ok(-28.)
+        );
     }
 }
