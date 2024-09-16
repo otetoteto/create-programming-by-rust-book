@@ -1,76 +1,88 @@
 #[derive(Debug, PartialEq)]
-enum TokenTree<'src> {
-    Token(Token<'src>),
-    Tree(Vec<TokenTree<'src>>),
-}
-
-#[derive(Debug, PartialEq)]
-enum Token<'src> {
+enum Expression<'src> {
     Ident(&'src str),
-    Number(f64),
-    LParen,
-    RParen,
+    NumLiteral(f64),
+    Add(Box<Expression<'src>>, Box<Expression<'src>>),
 }
 
 fn main() {
     println!("Hello, world!");
 }
 
-fn source(mut input: &str) -> (&str, TokenTree) {
-    let mut trees = vec![];
-    while !input.is_empty() {
-        input = if let (next_input, Some(token)) = token(input) {
-            match token {
-                Token::LParen => {
-                    let (i, tree) = source(next_input);
-                    trees.push(tree);
-                    i
-                }
-                Token::RParen => {
-                    return (next_input, TokenTree::Tree(trees));
-                }
-                _ => {
-                    trees.push(TokenTree::Token(token));
-                    next_input
-                }
-            }
+fn expr(input: &str) -> Option<(&str, Expression)> {
+    if let Some(res) = add(input) {
+        return Some(res);
+    }
+    if let Some(res) = term(input) {
+        return Some(res);
+    }
+    None
+}
+
+fn add(mut input: &str) -> Option<(&str, Expression)> {
+    let mut left = None;
+    while let Some((next_input, expr)) = add_term(input) {
+        if let Some(prev_left) = left {
+            left = Some(Expression::Add(Box::new(prev_left), Box::new(expr)));
         } else {
-            break;
+            left = Some(expr);
         }
+        input = next_input
     }
-    (whitespace(input), TokenTree::Tree(trees))
+
+    let left = left?;
+    let (next_input, rhs) = expr(input)?;
+
+    Some((next_input, Expression::Add(Box::new(left), Box::new(rhs))))
 }
 
-fn token(i: &str) -> (&str, Option<Token>) {
-    if let Some((i, ident_res)) = ident(whitespace(i)) {
-        return (i, Some(ident_res));
+fn term(input: &str) -> Option<(&str, Expression)> {
+    if let Some(res) = paren(input) {
+        return Some(res);
     }
-    if let Some((i, number_res)) = number(whitespace(i)) {
-        return (i, Some(number_res));
+    if let Some(res) = token(input) {
+        return Some(res);
     }
-    if let (i, Some(lparen_res)) = lparen(whitespace(i)) {
-        return (i, Some(lparen_res));
-    }
-    if let (i, Some(rparen_res)) = rparen(whitespace(i)) {
-        return (i, Some(rparen_res));
-    }
-    (i, None)
+    None
 }
 
-fn lparen(mut input: &str) -> (&str, Option<Token>) {
+fn add_term(input: &str) -> Option<(&str, Expression)> {
+    let (next_input, lhs) = term(input)?;
+    let next_input = plus(whitespace(next_input))?;
+    Some((next_input, lhs))
+}
+
+fn paren(input: &str) -> Option<(&str, Expression)> {
+    let next_input = lparen(whitespace(input))?;
+    let (next_input, expr) = expr(next_input)?;
+    let next_input = rparen(whitespace(next_input))?;
+    Some((next_input, expr))
+}
+
+fn token(input: &str) -> Option<(&str, Expression)> {
+    if let Some(res) = ident(whitespace(input)) {
+        return Some(res);
+    }
+    if let Some(res) = number(whitespace(input)) {
+        return Some(res);
+    }
+    None
+}
+
+fn lparen(mut input: &str) -> Option<&str> {
     if matches!(peek_char(input), Some('(')) {
         input = advance_char(input);
-        return (input, Some(Token::LParen));
+        return Some(input);
     }
-    (input, None)
+    None
 }
 
-fn rparen(mut input: &str) -> (&str, Option<Token>) {
+fn rparen(mut input: &str) -> Option<&str> {
     if matches!(peek_char(input), Some(')')) {
         input = advance_char(input);
-        return (input, Some(Token::RParen));
+        return Some(input);
     }
-    (input, None)
+    None
 }
 
 fn whitespace(mut input: &str) -> &str {
@@ -80,7 +92,7 @@ fn whitespace(mut input: &str) -> &str {
     input
 }
 
-fn number(mut input: &str) -> Option<(&str, Token)> {
+fn number(mut input: &str) -> Option<(&str, Expression)> {
     let start = input;
     if matches!(peek_char(input), Some(_x @ ('-' | '+' | '0'..='9'))) {
         input = advance_char(input);
@@ -88,13 +100,13 @@ fn number(mut input: &str) -> Option<(&str, Token)> {
             input = advance_char(input);
         }
         if let Ok(num) = start[..(start.len() - input.len())].parse::<f64>() {
-            return Some((input, Token::Number(num)));
+            return Some((input, Expression::NumLiteral(num)));
         }
     }
     None
 }
 
-fn ident(mut input: &str) -> Option<(&str, Token)> {
+fn ident(mut input: &str) -> Option<(&str, Expression)> {
     let start = input;
     if matches!(peek_char(input), Some(_x @ ('a'..='z' | 'A'..='Z'))) {
         while matches!(
@@ -103,7 +115,17 @@ fn ident(mut input: &str) -> Option<(&str, Token)> {
         ) {
             input = advance_char(input);
         }
-        return Some((input, Token::Ident(&start[..(start.len() - input.len())])));
+        return Some((
+            input,
+            Expression::Ident(&start[..(start.len() - input.len())]),
+        ));
+    }
+    None
+}
+
+fn plus(input: &str) -> Option<&str> {
+    if matches!(peek_char(input), Some('+')) {
+        return Some(advance_char(input));
     }
     None
 }
@@ -129,33 +151,37 @@ mod test {
 
     #[test]
     fn test_number() {
-        assert_eq!(number("-123.4 "), Some((" ", Token::Number(-123.4))));
+        assert_eq!(
+            number("-123.4 "),
+            Some((" ", Expression::NumLiteral(-123.4)))
+        );
     }
 
     #[test]
     fn test_ident() {
-        assert_eq!(ident("hoge5 123"), Some((" 123", Token::Ident("hoge5"))));
+        assert_eq!(
+            ident("hoge5 123"),
+            Some((" 123", Expression::Ident("hoge5")))
+        );
     }
 
     #[test]
-    fn test_source() {
+    fn test_add() {
         assert_eq!(
-            source("    ident  12.4 -3 token (( +0.9)((  a ))        )   "),
-            (
+            expr("1 + (2.3 + ident) + 3"),
+            Some((
                 "",
-                TokenTree::Tree(vec![
-                    TokenTree::Token(Token::Ident("ident")),
-                    TokenTree::Token(Token::Number(12.4)),
-                    TokenTree::Token(Token::Number(-3 as f64)),
-                    TokenTree::Token(Token::Ident("token")),
-                    TokenTree::Tree(vec![
-                        TokenTree::Tree(vec![TokenTree::Token(Token::Number(0.9)),]),
-                        TokenTree::Tree(vec![TokenTree::Tree(vec![TokenTree::Token(
-                            Token::Ident("a")
-                        ),])])
-                    ]),
-                ])
-            )
+                Expression::Add(
+                    Box::new(Expression::Add(
+                        Box::new(Expression::NumLiteral(1.)),
+                        Box::new(Expression::Add(
+                            Box::new(Expression::NumLiteral(2.3)),
+                            Box::new(Expression::Ident("ident"))
+                        ))
+                    )),
+                    Box::new(Expression::NumLiteral(3.)),
+                )
+            ))
         )
     }
 }
