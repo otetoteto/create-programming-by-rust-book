@@ -1,14 +1,18 @@
+use std::io::Read;
+
 use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{alpha1, alphanumeric1, char, multispace0},
     combinator::{opt, recognize},
     error::ParseError,
-    multi::{fold_many0, many0},
+    multi::{fold_many0, many0, separated_list0},
     number::complete::recognize_float,
     sequence::{delimited, pair},
-    IResult, Parser,
+    Finish, IResult, Parser,
 };
+
+type Statements<'a> = Vec<Expression<'a>>;
 
 #[derive(Debug, PartialEq, Clone)]
 enum Token<'src> {
@@ -27,7 +31,20 @@ enum Expression<'src> {
 }
 
 fn main() {
-    println!("Hello, world!");
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_ok() {
+        let parsed_statements = match statements(&buf) {
+            Ok(parsed_statements) => parsed_statements,
+            Err(e) => {
+                eprintln!("Parse error {e:?}");
+                return;
+            }
+        };
+
+        for statement in parsed_statements {
+            println!("eval: {:?}", eval(statement));
+        }
+    }
 }
 
 fn eval(expr: Expression) -> f64 {
@@ -56,6 +73,11 @@ fn eval(expr: Expression) -> f64 {
             panic!("Unknown function {name:?}")
         }
     }
+}
+
+fn statements(i: &str) -> Result<Statements, nom::error::Error<&str>> {
+    let (_, res) = separated_list0(tag(";"), expr)(i).finish()?;
+    Ok(res)
 }
 
 fn expr(i: &str) -> IResult<&str, Expression> {
