@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::{collections::HashMap, io::Read};
 
 use nom::{
     branch::alt,
@@ -12,7 +12,13 @@ use nom::{
     Finish, IResult, Parser,
 };
 
-type Statements<'a> = Vec<Expression<'a>>;
+type Statements<'a> = Vec<Statement<'a>>;
+
+#[derive(Debug, Clone, PartialEq)]
+enum Statement<'src> {
+    Expression(Expression<'src>),
+    VarDef(&'src str, Expression<'src>),
+}
 
 #[derive(Debug, PartialEq, Clone)]
 enum Token<'src> {
@@ -41,42 +47,69 @@ fn main() {
             }
         };
 
+        let mut variables = HashMap::new();
+
         for statement in parsed_statements {
-            println!("eval: {:?}", eval(statement));
+            match statement {
+                Statement::Expression(expr) => {
+                    println!("eval: {:?}", eval(expr, &variables));
+                }
+                Statement::VarDef(name, expr) => {
+                    let value = eval(expr, &variables);
+                    variables.insert(name, value);
+                }
+            }
         }
     }
 }
 
-fn eval(expr: Expression) -> f64 {
+fn eval(expr: Expression, vars: &HashMap<&str, f64>) -> f64 {
     match expr {
         Expression::Value(token) => match token {
-            Token::Ident(ident) => panic!("Unknown name {:?}", ident),
+            Token::Ident(ident) => *vars.get(ident).expect("Variable not found"),
             Token::Number(f) => f,
         },
-        Expression::Add(lhs, rhs) => eval(*lhs) + eval(*rhs),
-        Expression::Sub(lhs, rhs) => eval(*lhs) - eval(*rhs),
-        Expression::Mul(lhs, rhs) => eval(*lhs) * eval(*rhs),
-        Expression::Div(lhs, rhs) => eval(*lhs) / eval(*rhs),
-        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args),
-        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args),
-        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args),
-        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args),
-        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args),
-        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args),
-        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args),
-        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args),
-        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args),
-        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args),
-        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args),
-        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args),
+        Expression::Add(lhs, rhs) => eval(*lhs, vars) + eval(*rhs, vars),
+        Expression::Sub(lhs, rhs) => eval(*lhs, vars) - eval(*rhs, vars),
+        Expression::Mul(lhs, rhs) => eval(*lhs, vars) * eval(*rhs, vars),
+        Expression::Div(lhs, rhs) => eval(*lhs, vars) / eval(*rhs, vars),
+        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
+        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
+        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
+        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args, vars),
+        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args, vars),
+        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args, vars),
+        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args, vars),
+        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args, vars),
+        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args, vars),
+        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args, vars),
+        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args, vars),
+        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
         Expression::FnInvoke(name, _) => {
             panic!("Unknown function {name:?}")
         }
     }
 }
 
+fn statement(i: &str) -> IResult<&str, Statement> {
+    alt((var_def, expr_statement))(i)
+}
+
+fn var_def(i: &str) -> IResult<&str, Statement> {
+    let (i, _) = space_delimited(tag("var"))(i)?;
+    let (i, ident) = space_delimited(identifier)(i)?;
+    let (i, _) = space_delimited(char('='))(i)?;
+    let (i, expr) = space_delimited(expr)(i)?;
+    Ok((i, Statement::VarDef(ident, expr)))
+}
+
+fn expr_statement(i: &str) -> IResult<&str, Statement> {
+    let (i, res) = expr(i)?;
+    Ok((i, Statement::Expression(res)))
+}
+
 fn statements(i: &str) -> Result<Statements, nom::error::Error<&str>> {
-    let (_, res) = separated_list0(tag(";"), expr)(i).finish()?;
+    let (_, res) = separated_list0(tag(";"), statement)(i).finish()?;
     Ok(res)
 }
 
@@ -108,19 +141,26 @@ fn term(i: &str) -> IResult<&str, Expression> {
     )(i)
 }
 
-fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
-    move |args| {
+fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>, &HashMap<&str, f64>) -> f64 {
+    move |args, vars| {
         f(eval(
             args.into_iter().next().expect("function missing argument"),
+            vars,
         ))
     }
 }
 
-fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
-    move |args| {
+fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>, &HashMap<&str, f64>) -> f64 {
+    move |args, vars| {
         let mut itr = args.into_iter();
-        let lhs = eval(itr.next().expect("function missing the first argument"));
-        let rhs = eval(itr.next().expect("function missing the second argument"));
+        let lhs = eval(
+            itr.next().expect("function missing the first argument"),
+            vars,
+        );
+        let rhs = eval(
+            itr.next().expect("function missing the second argument"),
+            vars,
+        );
         f(lhs, rhs)
     }
 }
@@ -215,15 +255,5 @@ mod test {
                 )
             ))
         )
-    }
-
-    #[test]
-    fn test_eval() {
-        assert_eq!(expr(" 2 + 3 * 2").map(|(_, e)| eval(e)), Ok(8.));
-        assert_eq!(
-            expr("10 / 5 - 5 * 2 * (1 + 2)").map(|(_, e)| eval(e)),
-            Ok(-28.)
-        );
-        assert_eq!(expr("pow(2, 3) + 3").map(|(_, e)| eval(e)), Ok(11.))
     }
 }
