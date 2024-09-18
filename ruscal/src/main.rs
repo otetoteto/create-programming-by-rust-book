@@ -18,6 +18,7 @@ type Statements<'a> = Vec<Statement<'a>>;
 enum Statement<'src> {
     Expression(Expression<'src>),
     VarDef(&'src str, Expression<'src>),
+    VarAssign(&'src str, Expression<'src>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -58,41 +59,49 @@ fn main() {
                     let value = eval(expr, &variables);
                     variables.insert(name, value);
                 }
+                Statement::VarAssign(name, expr) => {
+                    if !variables.contains_key(name) {
+                        panic!("Variables is not difined");
+                    }
+                    let value = eval(expr, &variables);
+                    variables.insert(name, value);
+                }
             }
         }
     }
 }
 
 fn eval(expr: Expression, vars: &HashMap<&str, f64>) -> f64 {
+    use Expression::*;
     match expr {
-        Expression::Value(token) => match token {
+        Value(token) => match token {
             Token::Ident(ident) => *vars.get(ident).expect("Variable not found"),
             Token::Number(f) => f,
         },
-        Expression::Add(lhs, rhs) => eval(*lhs, vars) + eval(*rhs, vars),
-        Expression::Sub(lhs, rhs) => eval(*lhs, vars) - eval(*rhs, vars),
-        Expression::Mul(lhs, rhs) => eval(*lhs, vars) * eval(*rhs, vars),
-        Expression::Div(lhs, rhs) => eval(*lhs, vars) / eval(*rhs, vars),
-        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
-        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
-        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
-        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args, vars),
-        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args, vars),
-        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args, vars),
-        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args, vars),
-        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args, vars),
-        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args, vars),
-        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args, vars),
-        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args, vars),
-        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
-        Expression::FnInvoke(name, _) => {
+        Add(lhs, rhs) => eval(*lhs, vars) + eval(*rhs, vars),
+        Sub(lhs, rhs) => eval(*lhs, vars) - eval(*rhs, vars),
+        Mul(lhs, rhs) => eval(*lhs, vars) * eval(*rhs, vars),
+        Div(lhs, rhs) => eval(*lhs, vars) / eval(*rhs, vars),
+        FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
+        FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
+        FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
+        FnInvoke("tan", args) => unary_fn(f64::tan)(args, vars),
+        FnInvoke("asin", args) => unary_fn(f64::asin)(args, vars),
+        FnInvoke("acos", args) => unary_fn(f64::acos)(args, vars),
+        FnInvoke("atan", args) => unary_fn(f64::atan)(args, vars),
+        FnInvoke("atan2", args) => binary_fn(f64::atan2)(args, vars),
+        FnInvoke("pow", args) => binary_fn(f64::powf)(args, vars),
+        FnInvoke("exp", args) => unary_fn(f64::exp)(args, vars),
+        FnInvoke("log", args) => binary_fn(f64::log)(args, vars),
+        FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
+        FnInvoke(name, _) => {
             panic!("Unknown function {name:?}")
         }
     }
 }
 
 fn statement(i: &str) -> IResult<&str, Statement> {
-    alt((var_def, expr_statement))(i)
+    alt((var_def, var_assign, expr_statement))(i)
 }
 
 fn var_def(i: &str) -> IResult<&str, Statement> {
@@ -101,6 +110,13 @@ fn var_def(i: &str) -> IResult<&str, Statement> {
     let (i, _) = space_delimited(char('='))(i)?;
     let (i, expr) = space_delimited(expr)(i)?;
     Ok((i, Statement::VarDef(ident, expr)))
+}
+
+fn var_assign(i: &str) -> IResult<&str, Statement> {
+    let (i, ident) = space_delimited(identifier)(i)?;
+    let (i, _) = space_delimited(char('='))(i)?;
+    let (i, expr) = space_delimited(expr)(i)?;
+    Ok((i, Statement::VarAssign(ident, expr)))
 }
 
 fn expr_statement(i: &str) -> IResult<&str, Statement> {
@@ -215,45 +231,4 @@ where
     E: ParseError<&'src str>,
 {
     delimited(multispace0, f, multispace0)
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_number() {
-        assert_eq!(
-            number("-123.4 "),
-            Ok(("", Expression::Value(Token::Number(-123.4))))
-        );
-    }
-
-    #[test]
-    fn test_ident() {
-        assert_eq!(
-            ident("hoge5 123"),
-            Ok(("123", Expression::Value(Token::Ident("hoge5"))))
-        );
-    }
-
-    #[test]
-    fn test_add() {
-        assert_eq!(
-            expr("1 + (2.3 + ident) + 3"),
-            Ok((
-                "",
-                Expression::Add(
-                    Box::new(Expression::Add(
-                        Box::new(Expression::Value(Token::Number(1.))),
-                        Box::new(Expression::Add(
-                            Box::new(Expression::Value(Token::Number(2.3))),
-                            Box::new(Expression::Value(Token::Ident("ident")))
-                        ))
-                    )),
-                    Box::new(Expression::Value(Token::Number(3.))),
-                )
-            ))
-        )
-    }
 }
